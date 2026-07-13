@@ -9,7 +9,7 @@ require (
 	github.com/spf13/cobra v1.10.1
 	gomodules.xyz/go-sh v0.1.0
 	gomodules.xyz/logs v0.0.7
-	gomodules.xyz/x v0.0.17
+	gomodules.xyz/x v0.0.18
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/apimachinery v0.34.3
 	k8s.io/client-go v0.34.3
@@ -17,7 +17,7 @@ require (
 	k8s.io/klog/v2 v2.130.1
 	kmodules.xyz/client-go v0.34.3
 	kmodules.xyz/go-containerregistry v0.0.15
-	kmodules.xyz/resource-metadata v0.48.0
+	kmodules.xyz/resource-metadata v0.48.1-0.20260713095944-b5ef2148513d
 	kubeops.dev/scanner v0.0.19
 	sigs.k8s.io/yaml v1.6.0
 )
