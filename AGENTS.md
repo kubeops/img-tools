@@ -9,7 +9,7 @@ Go module `kmodules.xyz/image-packer` — a CLI of OCI image tools used by AppsC
 - `parse` — parse an image reference into registry/repo/tag/digest components.
 - `list` — list all images referenced by a Helm chart.
 - `list-editor-charts` — list editor charts (catalog mode).
-- `list-feature-charts` — list feature-set charts.
+- `list-feature-charts` — list feature-set charts (`feature-charts.yaml`) and, unless `--with-images=false`, render each of them at its pinned version with the values its Feature carries to list the container images they reference (`feature-chart-images.yaml`). The second output exists because feature charts are third-party — their images appear in the installer tree only as `image.repository` / `image.name` maps inside a Feature's `spec.values`, which `list` cannot see, and without a tag.
 - `ace-up` — upload the ACE catalog images to a target registry.
 - `generate-scripts` — generate `copy-images.sh` / `export-images.sh` / `import-images.sh` / `import-into-k3s.sh` for an image catalog.
 - `generate-gcp-script` — GCP-flavored mirror script.
