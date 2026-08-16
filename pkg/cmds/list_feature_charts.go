@@ -35,9 +35,10 @@ import (
 
 func NewCmdListFeatureCharts() *cobra.Command {
 	var (
-		rootDir    string
-		outDir     string
-		withImages = true
+		rootDir       string
+		outDir        string
+		withImages    = true
+		excludeCharts []string
 	)
 	cmd := &cobra.Command{
 		Use:                   "list-feature-charts",
@@ -62,7 +63,7 @@ func NewCmdListFeatureCharts() *cobra.Command {
 				return nil
 			}
 
-			images, skipped, err := lib.FeatureChartImages(charts)
+			images, skipped, err := lib.FeatureChartImages(excludeFeatureCharts(charts, excludeCharts))
 			if err != nil {
 				return err
 			}
@@ -77,9 +78,37 @@ func NewCmdListFeatureCharts() *cobra.Command {
 	cmd.Flags().StringVar(&rootDir, "root-dir", "", "Root directory")
 	cmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory")
 	cmd.Flags().BoolVar(&withImages, "with-images", withImages, "Render each feature chart and write the images it references to feature-chart-images.yaml")
+	cmd.Flags().StringSliceVar(&excludeCharts, "exclude-chart", nil, "Feature charts to leave out of feature-chart-images.yaml, by chart name. Use for charts whose images another catalog already publishes. Does not affect feature-charts.yaml")
 	_ = cobra.MarkFlagRequired(cmd.Flags(), "output-dir")
 
 	return cmd
+}
+
+func excludeFeatureCharts(charts []lib.FeatureChart, exclude []string) []lib.FeatureChart {
+	if len(exclude) == 0 {
+		return charts
+	}
+
+	skip := sets.New[string](exclude...)
+	kept := make([]lib.FeatureChart, 0, len(charts))
+	matched := sets.New[string]()
+	for _, chart := range charts {
+		if skip.Has(chart.Name) {
+			matched.Insert(chart.Name)
+			continue
+		}
+		kept = append(kept, chart)
+	}
+
+	// An exclusion that matches nothing is a stale or misspelled entry in the
+	// caller's list, and it would silently start collecting images again.
+	if unmatched := skip.Difference(matched); unmatched.Len() > 0 {
+		klog.Warningf("%d --exclude-chart value(s) matched no feature chart: %s",
+			unmatched.Len(), strings.Join(sets.List(unmatched), ", "))
+	}
+	klog.Infof("excluded %d feature chart(s) from the image list", matched.Len())
+
+	return kept
 }
 
 type Skeleton struct {
