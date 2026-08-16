@@ -19,23 +19,25 @@ package cmds
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"kmodules.xyz/client-go/tools/parser"
+	"kmodules.xyz/image-packer/pkg/lib"
 
 	"github.com/spf13/cobra"
 	shell "gomodules.xyz/go-sh"
-	"gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/klog/v2"
 )
 
 func NewCmdListFeatureCharts() *cobra.Command {
 	var (
-		rootDir string
-		outDir  string
+		rootDir    string
+		outDir     string
+		withImages = true
 	)
 	cmd := &cobra.Command{
 		Use:                   "list-feature-charts",
@@ -43,24 +45,38 @@ func NewCmdListFeatureCharts() *cobra.Command {
 		DisableFlagsInUseLine: true,
 		DisableAutoGenTag:     true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			images, err := ListUICharts(rootDir)
+			charts, err := ListUICharts(rootDir)
 			if err != nil {
 				return err
 			}
 
-			data, err := yaml.Marshal(images)
-			if err != nil {
+			refs := sets.New[string]()
+			for _, chart := range charts {
+				refs.Insert(chart.Ref())
+			}
+			if err := write(sets.List(refs), filepath.Join(outDir, "feature-charts.yaml")); err != nil {
 				return err
 			}
 
-			filename := filepath.Join(outDir, "feature-charts.yaml")
-			err = os.WriteFile(filename, data, 0o644)
-			return err
+			if !withImages {
+				return nil
+			}
+
+			images, skipped, err := lib.FeatureChartImages(charts)
+			if err != nil {
+				return err
+			}
+			if len(skipped) > 0 {
+				klog.Warningf("%d feature chart(s) failed to render; their images are missing from feature-chart-images.yaml: %s",
+					len(skipped), strings.Join(skipped, ", "))
+			}
+			return write(images, filepath.Join(outDir, "feature-chart-images.yaml"))
 		},
 	}
 
 	cmd.Flags().StringVar(&rootDir, "root-dir", "", "Root directory")
 	cmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory")
+	cmd.Flags().BoolVar(&withImages, "with-images", withImages, "Render each feature chart and write the images it references to feature-chart-images.yaml")
 	_ = cobra.MarkFlagRequired(cmd.Flags(), "output-dir")
 
 	return cmd
@@ -82,12 +98,11 @@ type ChartInfo struct {
 	Description string `json:"description"`
 }
 
-func ListUICharts(rootDir string) ([]string, error) {
+func ListUICharts(rootDir string) ([]lib.FeatureChart, error) {
 	sh := shell.NewSession()
 	sh.SetDir("/tmp")
 	sh.ShowCMD = true
 
-	images := sets.New[string]()
 	var out []byte
 	var err error
 
@@ -123,6 +138,10 @@ func ListUICharts(rootDir string) ([]string, error) {
 		panic(err)
 	}
 
+	var charts []lib.FeatureChart
+	// A chart can be pinned by several Features; the same chart deployed with
+	// different values can pull different images, so dedup on values too.
+	seen := sets.New[string]()
 	for _, ri := range helmout {
 		if ri.Object.GetKind() != "FeatureSet" && ri.Object.GetKind() != "Feature" {
 			continue
@@ -140,9 +159,27 @@ func ListUICharts(rootDir string) ([]string, error) {
 		} else if !found {
 			continue
 		}
+		values, _, err := unstructured.NestedMap(ri.Object.UnstructuredContent(), "spec", "values")
+		if err != nil {
+			return nil, err
+		}
 
-		images.Insert(fmt.Sprintf("ghcr.io/appscode-charts/%s:%s", chartName, chartVersion))
+		chart := lib.FeatureChart{
+			Name:    chartName,
+			Version: chartVersion,
+			Values:  values,
+		}
+		key, err := json.Marshal([]any{chart.Ref(), values})
+		if err != nil {
+			return nil, err
+		}
+		if seen.Has(string(key)) {
+			continue
+		}
+		seen.Insert(string(key))
+		charts = append(charts, chart)
 	}
 
-	return sets.List(images), nil
+	sort.Slice(charts, func(i, j int) bool { return charts[i].Ref() < charts[j].Ref() })
+	return charts, nil
 }

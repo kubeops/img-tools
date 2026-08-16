@@ -17,7 +17,6 @@ limitations under the License.
 package lib
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,24 +72,13 @@ func mapChartImages(rootDir string, values map[string]string, sh *shell.Session,
 
 	content, ok := values[chartName]
 	if ok {
-		tmpfile, err := os.CreateTemp("", chartName+"-val-*.yaml")
+		filename, err := writeTempValues(chartName, []byte(content))
 		if err != nil {
 			klog.Fatal(err)
 		}
-		defer os.Remove(tmpfile.Name()) // nolint:errcheck
+		defer os.Remove(filename) // nolint:errcheck
 
-		if _, err := io.WriteString(tmpfile, content); err != nil {
-			tmpfile.Close() // nolint:errcheck
-			klog.Fatal(err)
-		}
-
-		// 4. Close the file handle
-		// We must close the file handle before attempting to read from it or before the defer os.Remove runs.
-		if err := tmpfile.Close(); err != nil {
-			klog.Fatal(err)
-		}
-
-		args = append(args, "--values="+tmpfile.Name())
+		args = append(args, "--values="+filename)
 	}
 
 	if _, err := os.Stat(filepath.Join(rootDir, chartName, "ci", "ci-values.yaml")); err == nil {
@@ -107,17 +95,46 @@ func mapChartImages(rootDir string, values map[string]string, sh *shell.Session,
 		}
 	}
 	if out, err := sh.SetDir(rootDir).Command("helm", args...).Output(); err == nil {
-		helmout, err := parser.ListResources(out)
-		if err != nil {
+		if err := CollectRenderedImages(out, images); err != nil {
 			panic(err)
-		}
-
-		for _, ri := range helmout {
-			collectImages(ri.Object.UnstructuredContent(), images, ri.Object.GetObjectKind().GroupVersionKind().GroupKind().String())
 		}
 	} else {
 		klog.Infof("Skipping %s due to error: %v", chartName, err)
 	}
+}
+
+func writeTempValues(chartName string, content []byte) (string, error) {
+	tmpfile, err := os.CreateTemp("", chartName+"-val-*.yaml")
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := tmpfile.Write(content); err != nil {
+		tmpfile.Close()           // nolint:errcheck
+		os.Remove(tmpfile.Name()) // nolint:errcheck
+		return "", err
+	}
+
+	// The handle must be closed before helm reads the file.
+	if err := tmpfile.Close(); err != nil {
+		os.Remove(tmpfile.Name()) // nolint:errcheck
+		return "", err
+	}
+	return tmpfile.Name(), nil
+}
+
+// CollectRenderedImages records every image referenced by the resources in a
+// `helm template` output into images, keyed by image and valued by the GroupKind
+// of the resource that referenced it.
+func CollectRenderedImages(out []byte, images map[string]string) error {
+	resources, err := parser.ListResources(out)
+	if err != nil {
+		return err
+	}
+	for _, ri := range resources {
+		collectImages(ri.Object.UnstructuredContent(), images, ri.Object.GetObjectKind().GroupVersionKind().GroupKind().String())
+	}
+	return nil
 }
 
 // placeholderRE matches a shell-style ${...} template placeholder.
