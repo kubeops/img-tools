@@ -21,7 +21,10 @@ import (
 	"maps"
 	"os"
 	"sort"
+	"strings"
 	"sync"
+
+	"kmodules.xyz/go-containerregistry/name"
 
 	shell "gomodules.xyz/go-sh"
 	"k8s.io/klog/v2"
@@ -79,7 +82,30 @@ func FeatureChartImages(charts []FeatureChart) (images []string, skipped []strin
 	wg.Wait()
 
 	sort.Strings(skipped)
-	return ListImages(found), skipped, nil
+	return dropUntaggedImages(ListImages(found)), skipped, nil
+}
+
+// dropUntaggedImages removes digest-only references. generate-scripts derives a
+// tarball name and a destination reference from the tag, so it rejects images
+// that carry only a digest; keeping them would break every catalog that feeds
+// on this list. Feature charts do occasionally pin by digest, so drop those
+// refs loudly rather than let the whole run fail.
+func dropUntaggedImages(images []string) []string {
+	result := make([]string, 0, len(images))
+	var dropped []string
+	for _, img := range images {
+		ref, err := name.ParseReference(img)
+		if err != nil || ref.Tag == "" {
+			dropped = append(dropped, img)
+			continue
+		}
+		result = append(result, img)
+	}
+	if len(dropped) > 0 {
+		klog.Warningf("dropping %d digest-only image ref(s), not mirrorable by generate-scripts: %s",
+			len(dropped), strings.Join(dropped, ", "))
+	}
+	return result
 }
 
 func featureChartImages(chart FeatureChart) (map[string]string, error) {
