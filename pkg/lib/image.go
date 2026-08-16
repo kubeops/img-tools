@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"kmodules.xyz/client-go/tools/parser"
+	"kmodules.xyz/go-containerregistry/name"
 
 	shell "gomodules.xyz/go-sh"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -140,12 +141,56 @@ func CollectRenderedImages(out []byte, images map[string]string) error {
 // placeholderRE matches a shell-style ${...} template placeholder.
 var placeholderRE = regexp.MustCompile(`\$\{[^}]*\}`)
 
+// containerArgRE matches a --flag=value container argument.
+var containerArgRE = regexp.MustCompile(`^--[A-Za-z0-9._-]+=(\S+)$`)
+
+// imageFromContainerArg reports an image reference passed to a container as a
+// flag, e.g. --acme-http01-solver-image=<ref> or --prometheus-config-reloader=<ref>.
+// An operator that launches other workloads takes their image this way, and the
+// reference appears nowhere else in the manifest.
+func imageFromContainerArg(arg string) (string, bool) {
+	m := containerArgRE.FindStringSubmatch(arg)
+	if m == nil {
+		return "", false
+	}
+	ref := m[1]
+
+	// name.ParseReference is far too permissive on its own: it defaults the
+	// registry to docker.io and the tag to latest, so it accepts most flag
+	// values (--log-level=info parses). Demand an explicit registry host and an
+	// explicit tag or digest, which every image passed this way carries.
+	if strings.Contains(ref, "://") {
+		return "", false
+	}
+	host, remainder, ok := strings.Cut(ref, "/")
+	if !ok || (!strings.ContainsAny(host, ".:") && host != "localhost") {
+		return "", false
+	}
+	if last := remainder[strings.LastIndex(remainder, "/")+1:]; !strings.ContainsAny(last, ":@") {
+		return "", false
+	}
+	if _, err := name.ParseReference(ref); err != nil {
+		return "", false
+	}
+	return ref, true
+}
+
 func collectImages(obj map[string]any, images map[string]string, srcGK string) {
 	for k, v := range obj {
 		if k == "image" {
 			if s, ok := v.(string); ok && strings.ContainsRune(s, ':') {
 				for _, img := range expandVersionedImage(s, obj) {
 					images[img] = srcGK
+				}
+			}
+		} else if k == "args" || k == "command" {
+			if items, ok := v.([]any); ok {
+				for _, item := range items {
+					if s, ok := item.(string); ok {
+						if img, ok := imageFromContainerArg(s); ok {
+							images[img] = srcGK
+						}
+					}
 				}
 			}
 		} else if m, ok := v.(map[string]any); ok {
