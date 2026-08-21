@@ -135,6 +135,7 @@ func NewCmdAceUp() *cobra.Command {
 			aceMap["ghcr.io/appscode-charts/ace-installer"] = []string{tagB3}
 			aceMap["ghcr.io/appscode-charts/ace"] = []string{tagB3}
 			aceMap["ghcr.io/appscode-charts/service-gateway"] = []string{tagB3}
+			aceMap["ghcr.io/appscode-charts/acaas"] = []string{tagB3}
 
 			return write(ToImageList2(aceMap), filepath.Join(dir, "catalog", "ace.yaml"))
 		},
